@@ -1,12 +1,11 @@
-use nalgebra::{Matrix2, Vector2};
+use nalgebra::{DimMul, Matrix2, Vector2};
 use std::sync::atomic;
 use std::{alloc, ptr};
 
 pub struct Channel {
     inner: *mut f32,
-    layout: alloc::Layout,
-    width: usize,
-    height: usize,
+    memory_layout: alloc::Layout,
+    size: Vector2<usize>,
     ref_counter: ptr::NonNull<atomic::AtomicIsize>,
 }
 
@@ -29,8 +28,7 @@ pub struct WriteIter<'a> {
 pub struct WriteIterGuard {
     inner: *mut [f32],
     offset: usize,
-    width: usize,
-    height: usize,
+    size: Vector2<usize>,
     ref_counter: ptr::NonNull<atomic::AtomicIsize>,
 }
 
@@ -39,9 +37,8 @@ impl Channel {
         let layout = alloc::Layout::array::<f32>(width * height).unwrap();
         Self {
             inner: unsafe { alloc::alloc_zeroed(layout) as *mut f32 },
-            width,
-            height,
-            layout,
+            size: Vector2::new(width, height),
+            memory_layout: layout,
             ref_counter: Box::leak(Box::new(atomic::AtomicIsize::new(0))).into(),
         }
     }
@@ -80,7 +77,7 @@ impl Channel {
 
 impl Drop for Channel {
     fn drop(&mut self) {
-        unsafe { alloc::dealloc(self.inner as *mut u8, self.layout) }
+        unsafe { alloc::dealloc(self.inner as *mut u8, self.memory_layout) }
     }
 }
 
@@ -89,7 +86,7 @@ impl<'a> WriteGuard<'a> {
         unsafe {
             &mut *ptr::slice_from_raw_parts_mut(
                 self.channel.inner,
-                self.channel.width * self.channel.height,
+                self.channel.size.x * self.channel.size.y,
             )
         }
     }
@@ -104,24 +101,25 @@ impl<'a> WriteGuard<'a> {
     }
 
     fn clone_from(&mut self, source: &ReadGuard) {
-        if self.channel.width == source.channel.width
-            && self.channel.height == source.channel.height
+        if self.channel.size.x == source.channel.size.x
+            && self.channel.size.y == source.channel.size.y
         {
             unsafe {
                 ptr::copy_nonoverlapping(
                     source.channel.inner as *const u8,
                     self.channel.inner as *mut u8,
-                    self.channel.layout.size(),
+                    self.channel.memory_layout.size(),
                 );
             }
         } else {
             unsafe {
-                alloc::dealloc(self.channel.inner as *mut u8, self.channel.layout);
-                self.channel.inner = std::alloc::alloc_zeroed(source.channel.layout) as *mut f32;
+                alloc::dealloc(self.channel.inner as *mut u8, self.channel.memory_layout);
+                self.channel.inner =
+                    std::alloc::alloc_zeroed(source.channel.memory_layout) as *mut f32;
             }
-            self.channel.layout = source.channel.layout;
-            self.channel.width = source.channel.width;
-            self.channel.height = source.channel.height;
+            self.channel.memory_layout = source.channel.memory_layout;
+            self.channel.size.x = source.channel.size.x;
+            self.channel.size.y = source.channel.size.y;
         }
     }
 }
@@ -137,18 +135,18 @@ impl<'a> ReadGuard<'a> {
         unsafe {
             &*ptr::slice_from_raw_parts(
                 self.channel.inner as *const f32,
-                self.channel.width * self.channel.height,
+                self.channel.size.x * self.channel.size.y,
             )
         }
     }
 
     fn clone(&self) -> Channel {
-        let channel = Channel::new(self.channel.width, self.channel.height);
+        let channel = Channel::new(self.channel.size.x, self.channel.size.y);
         unsafe {
             ptr::copy_nonoverlapping(
                 self.channel.inner as *const u8,
                 channel.inner as *mut u8,
-                self.channel.layout.size(),
+                self.channel.memory_layout.size(),
             );
         }
         channel
@@ -165,33 +163,32 @@ impl<'a> Iterator for WriteIter<'a> {
     type Item = WriteIterGuard;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.step >= self.channel.height {
+        if self.step >= self.channel.size.y {
             None
         } else {
-            let offset = self.channel.height * self.step;
+            let offset = self.channel.size.y * self.step;
             self.step += 1;
             Some(WriteIterGuard {
                 inner: ptr::slice_from_raw_parts_mut(
                     unsafe { self.channel.inner.add(offset) },
-                    self.channel.width,
+                    self.channel.size.x,
                 ),
                 offset,
-                width: self.channel.width,
-                height: self.channel.height,
-                ref_counter: self.ref_counter.clone(),
+                size: Vector2::from_data(self.channel.size.data),
+                ref_counter: self.ref_counter,
             })
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.channel.height, Some(self.channel.height))
+        (self.channel.size.y, Some(self.channel.size.y))
     }
 
     fn count(self) -> usize
     where
         Self: Sized,
     {
-        self.channel.height
+        self.channel.size.y
     }
 }
 
@@ -199,13 +196,13 @@ unsafe impl Send for WriteIterGuard {}
 
 impl WriteIterGuard {
     /// FIXME: Explain matrix
-    pub fn offsets(&self) -> Matrix2<u32> {
+    pub fn offset(&self) -> Matrix2<u32> {
         // lu = left upper
         // rl = right lower
-        let lux = (self.offset % self.width) as u32;
-        let luy = (self.offset / self.width) as u32;
-        let rlx = (self.offset % self.width + self.offset) as u32;
-        let rly = (self.offset / self.width) as u32;
+        let lux = (self.offset % self.size.x) as u32;
+        let luy = (self.offset / self.size.x) as u32;
+        let rlx = (self.offset % self.size.x + self.offset) as u32;
+        let rly = (self.offset / self.size.x) as u32;
         Matrix2::new(lux, luy, rlx, rly)
     }
 
