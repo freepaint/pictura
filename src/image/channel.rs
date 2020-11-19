@@ -1,6 +1,9 @@
 use nalgebra::{Matrix2, Vector2};
 use std::sync::atomic;
 use std::{alloc, ptr};
+use std::future::Future;
+use std::task::{Context, Poll};
+use std::pin::Pin;
 
 pub struct Channel {
     inner: *mut f32,
@@ -32,6 +35,10 @@ pub struct WriteIterGuard {
     ref_counter: ptr::NonNull<atomic::AtomicIsize>,
 }
 
+pub struct WriteGuardAwaiter<'a> (Option<&'a mut Channel>);
+
+pub struct ReadGuardAwaiter<'a> (Option<&'a Channel>);
+
 impl Channel {
     pub fn new(width: usize, height: usize) -> Self {
         let layout = alloc::Layout::array::<f32>(width * height).unwrap();
@@ -48,7 +55,9 @@ impl Channel {
         while self.locked() != 0 {
             std::thread::yield_now();
         }
-        unsafe { self.ref_counter.as_ref() }.store(-1, atomic::Ordering::Release);
+        unsafe { self.ref_counter
+            .as_ref() }
+            .store(-1, atomic::Ordering::Release);
         let rc = self.ref_counter;
         WriteGuard {
             channel: self,
@@ -61,7 +70,21 @@ impl Channel {
         while self.locked() < 0 {
             std::thread::yield_now();
         }
-        unsafe { self.ref_counter.as_ref() }.fetch_sub(1, atomic::Ordering::AcqRel);
+        unsafe { self.force_lock_read() }
+    }
+
+    pub fn lock_write_async(&mut self) -> WriteGuardAwaiter {
+        WriteGuardAwaiter(Some(self))
+    }
+
+    pub fn lock_read_async(&self) -> ReadGuardAwaiter {
+        ReadGuardAwaiter(Some(self))
+    }
+
+    pub(self) unsafe fn force_lock_read(&self) -> ReadGuard {
+        self.ref_counter
+            .as_ref()
+            .fetch_sub(1, atomic::Ordering::AcqRel);
         let rc = self.ref_counter;
         ReadGuard {
             channel: self,
@@ -212,5 +235,60 @@ impl WriteIterGuard {
 
     pub fn get_mut(&mut self) -> &mut [f32] {
         unsafe { &mut *self.inner }
+    }
+}
+
+impl<'a> Future for WriteGuardAwaiter<'a> {
+    type Output = WriteGuard<'a>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.0.is_none() {
+            panic!("Future already completed");
+        }
+        let channel = self.0.as_ref().unwrap();
+        if channel.locked() == 0 {
+            unsafe { channel.ref_counter
+                .as_ref() }
+                .store(-1, atomic::Ordering::Release);
+            let rc = channel.ref_counter;
+            let channel = self.0.take().unwrap();
+            Poll::Ready(
+                WriteGuard {
+                    channel,
+                    ref_counter: rc,
+                }
+            )
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+}
+
+
+impl<'a> Future for ReadGuardAwaiter<'a> {
+    type Output = ReadGuard<'a>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.0.is_none() {
+            panic!("Future already completed");
+        }
+        let channel = self.0.as_ref().unwrap();
+        if channel.locked() == 0 {
+            unsafe { channel.ref_counter
+                .as_ref() }
+                .store(-1, atomic::Ordering::Release);
+            let rc = channel.ref_counter;
+            let channel = self.0.take().unwrap();
+            Poll::Ready(
+                ReadGuard {
+                    channel,
+                    ref_counter: rc,
+                }
+            )
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
     }
 }
