@@ -1,4 +1,4 @@
-use nalgebra::{DimMul, Matrix2, Vector2};
+use nalgebra::{Matrix2, Vector2};
 use std::sync::atomic;
 use std::{alloc, ptr};
 

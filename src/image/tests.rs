@@ -57,3 +57,65 @@ fn channel_test_mt() {
         "Channel should contain values, but doesn't"
     );
 }
+
+#[test]
+fn layer_test_gray() {
+    use crate::image::Layer;
+
+    let layer = Layer::new_gray(100, 100);
+    let channel = layer.channel();
+
+    assert!(
+        channel.contains(&"gray".to_string()),
+        "Layer 'gray' is missing!"
+    );
+    assert_eq!(channel.len(), 1, "To many channels? {:?}", channel);
+}
+
+#[test]
+fn layer_test_rgb() {
+    use crate::image::Layer;
+
+    let layer = Layer::new_rgb(100, 100);
+    let channel = layer.channel();
+
+    assert!(
+        channel.contains(&"red".to_string()),
+        "Layer 'red' is missing!"
+    );
+    assert!(
+        channel.contains(&"green".to_string()),
+        "Layer 'green' is missing!"
+    );
+    assert!(
+        channel.contains(&"blue".to_string()),
+        "Layer 'blue' is missing!"
+    );
+    assert_eq!(channel.len(), 3, "To many channels? {:?}", channel);
+}
+
+#[test]
+fn layer_test_rgba() {
+    use crate::image::Layer;
+
+    let layer = Layer::new_rgba(100, 100);
+    let channel = layer.channel();
+
+    assert!(
+        channel.contains(&"red".to_string()),
+        "Layer 'red' is missing!"
+    );
+    assert!(
+        channel.contains(&"green".to_string()),
+        "Layer 'green' is missing!"
+    );
+    assert!(
+        channel.contains(&"blue".to_string()),
+        "Layer 'blue' is missing!"
+    );
+    assert!(
+        channel.contains(&"alpha".to_string()),
+        "Layer 'alpha' is missing!"
+    );
+    assert_eq!(channel.len(), 4, "To many channels? {:?}", channel);
+}
