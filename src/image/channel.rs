@@ -157,7 +157,7 @@ impl WriteGuard {
         unsafe { &*self.inner }
     }
 
-    pub fn get_mut(&self) -> &mut [f32] {
+    pub fn get_mut(&mut self) -> &mut [f32] {
         unsafe { &mut *self.inner }
     }
 }
