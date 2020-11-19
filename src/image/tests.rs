@@ -43,9 +43,9 @@ fn channel_test_mt() {
         wl.chunked_iter_mut().for_each(|mut block| {
             let bc = bar.clone();
             std::thread::spawn(move || {
-                let off = block.offsets().0;
-                block.get_mut()[0] = off.0 as f32 + off.1 as f32 * 2.0;
-                block.get_mut()[1] = off.0 as f32 + off.1 as f32 * 2.0 + 1.0;
+                let ofs = block.offsets();
+                block.get_mut()[0] = ofs.m11 as f32 + ofs.m12 as f32 * 2.0;
+                block.get_mut()[1] = ofs.m11 as f32 + ofs.m12 as f32 * 2.0 + 1.0;
                 bc.wait();
             });
         })

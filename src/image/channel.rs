@@ -1,3 +1,4 @@
+use nalgebra::{Matrix2, Vector2};
 use std::sync::atomic;
 use std::{alloc, ptr};
 
@@ -197,18 +198,15 @@ impl<'a> Iterator for WriteIter<'a> {
 unsafe impl Send for WriteIterGuard {}
 
 impl WriteIterGuard {
-    // Fixme: This is horrible
-    pub fn offsets(&self) -> ((u32, u32), (u32, u32)) {
-        (
-            (
-                (self.offset % self.width) as u32,
-                (self.offset / self.width) as u32,
-            ),
-            (
-                (self.offset % self.width + self.offset) as u32,
-                (self.offset / self.width) as u32,
-            ),
-        )
+    /// FIXME: Explain matrix
+    pub fn offsets(&self) -> Matrix2<u32> {
+        // lu = left upper
+        // rl = right lower
+        let lux = (self.offset % self.width) as u32;
+        let luy = (self.offset / self.width) as u32;
+        let rlx = (self.offset % self.width + self.offset) as u32;
+        let rly = (self.offset / self.width) as u32;
+        Matrix2::new(lux, luy, rlx, rly)
     }
 
     pub fn get(&self) -> &[f32] {
