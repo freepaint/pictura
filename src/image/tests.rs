@@ -1,4 +1,4 @@
-#[test]
+#[mockalloc::test]
 #[allow(clippy::float_cmp)]
 fn channel_test_st() {
     use crate::image::Channel;
@@ -58,7 +58,7 @@ fn channel_test_mt() {
     );
 }
 
-#[test]
+#[mockalloc::test]
 fn layer_test_gray() {
     use crate::image::Layer;
 

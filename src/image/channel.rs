@@ -1,9 +1,9 @@
 use nalgebra::{Matrix2, Vector2};
-use std::sync::atomic;
-use std::{alloc, ptr};
 use std::future::Future;
-use std::task::{Context, Poll};
 use std::pin::Pin;
+use std::sync::atomic;
+use std::task::{Context, Poll};
+use std::{alloc, ptr};
 
 pub struct Channel {
     inner: *mut f32,
@@ -35,9 +35,9 @@ pub struct WriteIterGuard {
     ref_counter: ptr::NonNull<atomic::AtomicIsize>,
 }
 
-pub struct WriteGuardAwaiter<'a> (Option<&'a mut Channel>);
+pub struct WriteGuardAwaiter<'a>(Option<&'a mut Channel>);
 
-pub struct ReadGuardAwaiter<'a> (Option<&'a Channel>);
+pub struct ReadGuardAwaiter<'a>(Option<&'a Channel>);
 
 impl Channel {
     pub fn new(width: usize, height: usize) -> Self {
@@ -55,9 +55,7 @@ impl Channel {
         while self.locked() != 0 {
             std::thread::yield_now();
         }
-        unsafe { self.ref_counter
-            .as_ref() }
-            .store(-1, atomic::Ordering::Release);
+        unsafe { self.ref_counter.as_ref() }.store(-1, atomic::Ordering::Release);
         let rc = self.ref_counter;
         WriteGuard {
             channel: self,
@@ -100,7 +98,10 @@ impl Channel {
 
 impl Drop for Channel {
     fn drop(&mut self) {
-        unsafe { alloc::dealloc(self.inner as *mut u8, self.memory_layout) }
+        unsafe {
+            alloc::dealloc(self.inner as *mut u8, self.memory_layout);
+            Box::from_raw(self.ref_counter.as_ptr()); // get box from raw pointer and instantly drop it, deallocating it in the process
+        }
     }
 }
 
@@ -247,24 +248,19 @@ impl<'a> Future for WriteGuardAwaiter<'a> {
         }
         let channel = self.0.as_ref().unwrap();
         if channel.locked() == 0 {
-            unsafe { channel.ref_counter
-                .as_ref() }
-                .store(-1, atomic::Ordering::Release);
+            unsafe { channel.ref_counter.as_ref() }.store(-1, atomic::Ordering::Release);
             let rc = channel.ref_counter;
             let channel = self.0.take().unwrap();
-            Poll::Ready(
-                WriteGuard {
-                    channel,
-                    ref_counter: rc,
-                }
-            )
+            Poll::Ready(WriteGuard {
+                channel,
+                ref_counter: rc,
+            })
         } else {
             cx.waker().wake_by_ref();
             Poll::Pending
         }
     }
 }
-
 
 impl<'a> Future for ReadGuardAwaiter<'a> {
     type Output = ReadGuard<'a>;
@@ -275,17 +271,13 @@ impl<'a> Future for ReadGuardAwaiter<'a> {
         }
         let channel = self.0.as_ref().unwrap();
         if channel.locked() == 0 {
-            unsafe { channel.ref_counter
-                .as_ref() }
-                .store(-1, atomic::Ordering::Release);
+            unsafe { channel.ref_counter.as_ref() }.store(-1, atomic::Ordering::Release);
             let rc = channel.ref_counter;
             let channel = self.0.take().unwrap();
-            Poll::Ready(
-                ReadGuard {
-                    channel,
-                    ref_counter: rc,
-                }
-            )
+            Poll::Ready(ReadGuard {
+                channel,
+                ref_counter: rc,
+            })
         } else {
             cx.waker().wake_by_ref();
             Poll::Pending
