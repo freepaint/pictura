@@ -1,4 +1,9 @@
 use crate::image::Channel;
+use nalgebra::Vector4;
+
+pub trait Shader: Fn(&Layer, Vector4<f32>) -> Vector4<f32> + Send + Sync {}
+
+impl<T> Shader for T where T: Fn(&Layer, Vector4<f32>) -> Vector4<f32> + Send + Sync {}
 
 pub struct Layer {
     // TODO: Investigate better IDs then String
@@ -41,5 +46,11 @@ impl Layer {
 
     pub fn get_channel_mut<S: ToString>(&mut self, key: S) -> Option<&mut Channel> {
         self.channels.get_mut(&key.to_string())
+    }
+
+    pub fn templated_update<F>(shader: impl Shader, _template: &Layer) -> Layer {
+        let _shader = Box::new(shader) as Box<dyn Shader>;
+
+        todo!()
     }
 }
