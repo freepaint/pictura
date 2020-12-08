@@ -1,3 +1,5 @@
+use nalgebra::Vector2;
+
 #[mockalloc::test]
 #[allow(clippy::float_cmp)]
 fn channel_test_st() {
@@ -36,16 +38,18 @@ fn channel_test_mt() {
 
     let mut c = Channel::new(2, 2);
 
-    let bar = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let bar = std::sync::Arc::new(std::sync::Barrier::new(2));
 
     {
         let mut wl = c.lock_write();
         wl.chunked_iter_mut().for_each(|mut block| {
             let bc = bar.clone();
             std::thread::spawn(move || {
-                let ofs = block.offset();
-                block.get_mut()[0] = ofs.m11 as f32 + ofs.m12 as f32 * 2.0;
-                block.get_mut()[1] = ofs.m11 as f32 + ofs.m12 as f32 * 2.0 + 1.0;
+                println!("{:?}", block.offset());
+                block[Vector2::new(0, 0)] = 0.0;
+                block[Vector2::new(1, 0)] = 1.0;
+                block[Vector2::new(0, 1)] = 2.0;
+                block[Vector2::new(1, 1)] = 3.0;
                 bc.wait();
             });
         })

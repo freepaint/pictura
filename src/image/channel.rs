@@ -1,9 +1,12 @@
 use nalgebra::{Matrix2, Vector2};
 use std::future::Future;
+use std::ops::{Index, IndexMut};
 use std::pin::Pin;
 use std::sync::atomic;
 use std::task::{Context, Poll};
 use std::{alloc, ptr};
+
+pub const CHUNK_SIZE: usize = 64;
 
 pub struct Channel {
     inner: *mut f32,
@@ -24,13 +27,15 @@ pub struct ReadGuard<'a> {
 
 pub struct WriteIter<'a> {
     channel: &'a mut Channel,
-    step: usize,
+    step: Vector2<usize>,
     ref_counter: ptr::NonNull<atomic::AtomicIsize>,
+    done_flag: bool,
 }
 
 pub struct WriteIterGuard {
-    inner: *mut [f32],
-    offset: usize,
+    /// Some boxes are null pointers, be careful
+    inner: [*mut f32; CHUNK_SIZE],
+    corners: Matrix2<usize>,
     size: Vector2<usize>,
     ref_counter: ptr::NonNull<atomic::AtomicIsize>,
 }
@@ -65,8 +70,9 @@ impl Channel {
 
     pub fn lock_read(&self) -> ReadGuard {
         // FIXME: This is a horrible solution, please fix this
+        // Use condvar
         while self.locked() < 0 {
-            std::thread::yield_now();
+            std::thread::yield_now()
         }
         unsafe { self.force_lock_read() }
     }
@@ -119,8 +125,9 @@ impl<'a> WriteGuard<'a> {
         let rc = self.ref_counter;
         WriteIter {
             channel: self.channel,
-            step: 0,
+            step: Vector2::default(),
             ref_counter: rc,
+            done_flag: false,
         }
     }
 
@@ -187,21 +194,44 @@ impl<'a> Iterator for WriteIter<'a> {
     type Item = WriteIterGuard;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.step >= self.channel.size.y {
-            None
-        } else {
-            let offset = self.channel.size.y * self.step;
-            self.step += 1;
-            Some(WriteIterGuard {
-                inner: ptr::slice_from_raw_parts_mut(
-                    unsafe { self.channel.inner.add(offset) },
-                    self.channel.size.x,
-                ),
-                offset,
-                size: Vector2::from_data(self.channel.size.data),
-                ref_counter: self.ref_counter,
-            })
+        if self.done_flag {
+            return None;
         }
+
+        let base = self.channel.size.x * self.step.y + self.step.x;
+        let goal = self.channel.size.y.min(self.step.y + CHUNK_SIZE) + self.channel.size.x;
+
+        let mut chunks = [std::ptr::null_mut(); 64];
+
+        for y in (base..goal).step_by(self.channel.size.x) {
+            chunks[(y - base) / self.channel.size.x] = unsafe { self.channel.inner.add(y) };
+        }
+
+        let guard = WriteIterGuard {
+            inner: chunks,
+            corners: Matrix2::new(
+                self.step.x,
+                self.step.y,
+                self.channel.size.x.min(self.step.x + CHUNK_SIZE),
+                self.channel.size.y.min(self.step.y + CHUNK_SIZE),
+            ),
+            size: Vector2::new(
+                self.channel.size.x.min(self.step.x + CHUNK_SIZE) - self.step.x,
+                self.channel.size.y.min(self.step.y + CHUNK_SIZE) - self.step.y,
+            ),
+            ref_counter: self.ref_counter,
+        };
+
+        self.step.x += CHUNK_SIZE;
+        if self.step.x >= self.channel.size.x {
+            self.step.x = 0;
+            self.step.y += 1;
+            if self.step.y >= self.channel.size.y {
+                self.done_flag = true;
+            }
+        }
+
+        Some(guard)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -216,28 +246,46 @@ impl<'a> Iterator for WriteIter<'a> {
     }
 }
 
-unsafe impl Send for WriteIterGuard {}
-
 impl WriteIterGuard {
     /// FIXME: Explain matrix
     pub fn offset(&self) -> Matrix2<u32> {
-        // lu = left upper
-        // rl = right lower
-        let lux = (self.offset % self.size.x) as u32;
-        let luy = (self.offset / self.size.x) as u32;
-        let rlx = (self.offset % self.size.x + self.offset) as u32;
-        let rly = (self.offset / self.size.x) as u32;
-        Matrix2::new(lux, luy, rlx, rly)
+        self.corners.map(|n| n as u32)
     }
 
-    pub fn get(&self) -> &[f32] {
-        unsafe { &*self.inner }
-    }
-
-    pub fn get_mut(&mut self) -> &mut [f32] {
-        unsafe { &mut *self.inner }
+    pub fn bounds_check(&self, index: &Vector2<u32>) -> bool {
+        index.x > self.size.x as u32 || index.y > self.size.y as u32
     }
 }
+
+impl Index<Vector2<u32>> for WriteIterGuard {
+    type Output = f32;
+
+    fn index(&self, index: Vector2<u32>) -> &Self::Output {
+        if self.bounds_check(&index) {
+            panic!("Index out of bounds");
+        }
+        unsafe {
+            (self.inner[index.y as usize].add(index.x as usize))
+                .as_ref()
+                .unwrap()
+        }
+    }
+}
+
+impl IndexMut<Vector2<u32>> for WriteIterGuard {
+    fn index_mut(&mut self, index: Vector2<u32>) -> &mut Self::Output {
+        if self.bounds_check(&index) {
+            panic!("Index out of bounds");
+        }
+        unsafe {
+            (self.inner[index.y as usize].add(index.x as usize))
+                .as_mut()
+                .unwrap()
+        }
+    }
+}
+
+unsafe impl Send for WriteIterGuard {}
 
 impl<'a> Future for WriteGuardAwaiter<'a> {
     type Output = WriteGuard<'a>;
