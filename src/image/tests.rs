@@ -38,23 +38,21 @@ fn channel_test_mt() {
 
     let mut c = Channel::new(2, 2);
 
-    let bar = std::sync::Arc::new(std::sync::Barrier::new(2));
+    //let bar = std::sync::Arc::new(std::sync::Barrier::new(2));
 
     {
         let mut wl = c.lock_write();
-        wl.chunked_iter_mut().for_each(|mut block| {
-            let bc = bar.clone();
-            std::thread::spawn(move || {
-                println!("{:?}", block.offset());
-                block[Vector2::new(0, 0)] = 0.0;
-                block[Vector2::new(1, 0)] = 1.0;
-                block[Vector2::new(0, 1)] = 2.0;
-                block[Vector2::new(1, 1)] = 3.0;
-                bc.wait();
-            });
+        wl.chunked_iter_mut().zip(0..10).for_each(|(mut block, i)| {
+            //let bc = bar.clone();
+            println!("{}. {:?}", i, block.offset());
+            block[Vector2::new(0, 0)] = 0.0;
+            block[Vector2::new(1, 0)] = 1.0;
+            block[Vector2::new(0, 1)] = 2.0;
+            block[Vector2::new(1, 1)] = 3.0;
+            //bc.wait();
         })
     }
-    bar.wait();
+    //bar.wait();
     assert_eq!(
         c.lock_read().read_raw(),
         &[0.0, 1.0, 2.0, 3.0],
