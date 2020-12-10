@@ -1,6 +1,6 @@
 pub mod error;
 #[allow(dead_code)]
-mod image;
+pub mod image;
 
 #[cfg(test)]
 mod tests {

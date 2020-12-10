@@ -1,11 +1,13 @@
 use nalgebra::Vector2;
+use std::alloc;
 use std::alloc::Layout;
 use std::ops::{Index, IndexMut};
-use std::{alloc, ptr};
+use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 pub const CHUNK_SIZE: usize = 64;
 const MAX_PERMITS: usize = usize::MAX >> 3;
+const VECTOR: (u32, u32) = (64, 64);
 
 pub struct Channel<U: Sized = f32> {
     inner: *mut U,
@@ -14,17 +16,30 @@ pub struct Channel<U: Sized = f32> {
     lock: tokio::sync::Semaphore,
 }
 
+pub struct Chunk<'a, U: Sized = f32> {
+    channel: &'a Channel<U>,
+    upper_bound: Vector2<u32>,
+    lower_bound: Vector2<u32>,
+    permit: tokio::sync::SemaphorePermit<'a>,
+}
+
 pub struct ReadGuard<'a, U: Sized = f32> {
     lock: tokio::sync::SemaphorePermit<'a>,
     channel: &'a Channel<U>,
 }
 
 pub struct WritePermit<'a, U: Sized = f32> {
-    lock: tokio::sync::SemaphorePermit<'a>,
+    lock: Arc<tokio::sync::SemaphorePermit<'a>>,
     channel: &'a Channel<U>,
+    rewrite_lock: tokio::sync::Semaphore,
+    max_rewrite_locks: usize,
 }
 
-pub struct WriteIter<'a, U: Sized = f32> {}
+pub struct WriteIter<'a, U: Sized = f32> {
+    permit: &'a WritePermit<'a, U>,
+    position: Vector2<u32>,
+    permit_drain: Vec<tokio::sync::SemaphorePermit<'a>>,
+}
 
 impl<U: Sized> Channel<U> {
     pub fn new(size: Vector2<u32>) -> Result<Self, crate::error::AllocError> {
@@ -67,9 +82,14 @@ impl<U: Sized> Channel<U> {
     }
 
     pub async fn write(&self) -> WritePermit<'_, U> {
+        let rewrite_locks = ((self.size.x / VECTOR.0 + 1.min(self.size.x % VECTOR.0))
+            * (self.size.y / VECTOR.1 + 1.min(self.size.y % VECTOR.1)))
+            as usize;
         WritePermit {
-            lock: self.lock.acquire_many(MAX_PERMITS as u32).await,
+            lock: Arc::new(self.lock.acquire_many(MAX_PERMITS as u32).await),
             channel: self,
+            rewrite_lock: tokio::sync::Semaphore::new(rewrite_locks),
+            max_rewrite_locks: rewrite_locks,
         }
     }
 }
@@ -85,11 +105,29 @@ impl<'a, U: Sized> WritePermit<'a, U> {
         self.channel.size.map(|n| n as u32)
     }
 
-    pub fn iter_mut(&mut self) -> WriteIter {}
+    /// Trying to call this twice in a row while keeping the previous `WriteIter` will result in the second call blocking permanently
+    pub async fn iter_mut(&'a mut self) -> WriteIter<'a, U> {
+        let mut permit_drain = Vec::with_capacity(self.max_rewrite_locks);
+        for _ in 0..permit_drain.capacity() {
+            permit_drain.push(self.rewrite_lock.acquire().await);
+        }
+        WriteIter {
+            permit: &*self,
+            position: Vector2::new(0, 0),
+            permit_drain,
+        }
+    }
 }
 
-impl Iterator for WriteIter {
+impl<'a, U: Sized> Iterator for WriteIter<'a, U> {
+    type Item = Chunk<'a, U>;
+
     fn next(&mut self) -> Option<Self::Item> {
+        let channel = self.permit.channel;
+        if !channel.within(&self.position) {
+            return None;
+        }
+
         todo!()
     }
 
@@ -103,6 +141,10 @@ impl Iterator for WriteIter {
     {
         self.size_hint().0
     }
+}
+
+impl<'a, U: Sized> Drop for WriteIter<'a, U> {
+    fn drop(&mut self) {}
 }
 
 impl<'a, U: Sized> Index<&Vector2<u32>> for ReadGuard<'a, U> {
