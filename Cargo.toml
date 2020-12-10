@@ -10,5 +10,9 @@ fxhash = "0.2"
 # mozjpeg = "0.8"
 # png = "0.16"
 
+[dependencies.tokio]
+version = "0.3.5"
+features = ["sync"]
+
 [dev-dependencies]
 mockalloc = { version = "0.1", features = ["tracing"] }
